@@ -11,6 +11,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
 const CHANNEL_ID = process.env.CHANNEL_ID; // Main channel to monitor
 const WAITING_AREA_ID = process.env.WAITING_AREA_ID; // Waiting area channel
+const TARGET_USER_ID = process.env.TARGET_USER_ID; // User to auto-move (add this to .env)
 
 // Create a new Discord client
 const client = new Client({
@@ -103,6 +104,38 @@ function joinSpecificChannel(channelId) {
   }
 }
 
+// Function to move a user to a specific channel
+async function moveUserToChannel(userId, channelId) {
+  try {
+    const guild = client.guilds.cache.get(GUILD_ID);
+    if (!guild) {
+      console.error('❌ Guild not found!');
+      return false;
+    }
+
+    const member = await guild.members.fetch(userId);
+    if (!member) {
+      console.error('❌ Member not found!');
+      return false;
+    }
+
+    const channel = guild.channels.cache.get(channelId);
+    if (!channel) {
+      console.error('❌ Target channel not found!');
+      return false;
+    }
+
+    // Move the member
+    await member.voice.setChannel(channel);
+    console.log(`✅ Moved ${member.user.tag} to ${channel.name}`);
+    return true;
+
+  } catch (error) {
+    console.error('❌ Error moving user:', error);
+    return false;
+  }
+}
+
 // Function to check user count and join appropriate channel
 function checkAndJoinAppropriateChannel() {
   const mainChannelUserCount = countUsersInChannel(CHANNEL_ID);
@@ -132,13 +165,59 @@ function checkAndJoinAppropriateChannel() {
 }
 
 // Monitor voice state updates
-client.on('voiceStateUpdate', (oldState, newState) => {
+client.on('voiceStateUpdate', async (oldState, newState) => {
   // Ignore bot's own state changes
   if (newState.member?.id === client.user.id) {
     // Handle bot being disconnected
     if (oldState.channelId && !newState.channelId) {
       console.log('⚠️ Bot was disconnected from voice. Rejoining in 5 seconds...');
       setTimeout(() => checkAndJoinAppropriateChannel(), 5000);
+    }
+    return;
+  }
+
+  // Check if the target user joined any voice channel
+  if (TARGET_USER_ID && newState.member?.id === TARGET_USER_ID) {
+    // User joined a voice channel
+    if (!oldState.channelId && newState.channelId) {
+      console.log(`🎯 Target user joined a voice channel!`);
+      
+      // If they didn't join the main channel, move them there
+      if (newState.channelId !== CHANNEL_ID) {
+        console.log(`➡️ Moving target user to main channel...`);
+        // Small delay to ensure the join is complete
+        setTimeout(async () => {
+          await moveUserToChannel(TARGET_USER_ID, CHANNEL_ID);
+          // After moving the user, check channels again
+          setTimeout(() => checkAndJoinAppropriateChannel(), 1000);
+        }, 500);
+      } else {
+        console.log(`✅ Target user already in main channel`);
+        // User joined main channel directly, check bot position
+        setTimeout(() => checkAndJoinAppropriateChannel(), 1000);
+      }
+    }
+    // User switched channels
+    else if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
+      console.log(`🎯 Target user switched channels!`);
+      
+      // If they moved to a channel that's not the main channel, move them back
+      if (newState.channelId !== CHANNEL_ID) {
+        console.log(`➡️ Moving target user back to main channel...`);
+        setTimeout(async () => {
+          await moveUserToChannel(TARGET_USER_ID, CHANNEL_ID);
+          // After moving the user, check channels again
+          setTimeout(() => checkAndJoinAppropriateChannel(), 1000);
+        }, 500);
+      }
+    }
+    // User left voice channel
+    else if (oldState.channelId && !newState.channelId) {
+      console.log(`🎯 Target user left voice channel`);
+      // Check if they left the main channel
+      if (oldState.channelId === CHANNEL_ID) {
+        setTimeout(() => checkAndJoinAppropriateChannel(), 1000);
+      }
     }
     return;
   }
@@ -183,6 +262,16 @@ client.on('messageCreate', (message) => {
       console.log('👋 Left voice channel');
     } else {
       message.reply('Not in a voice channel!');
+    }
+  }
+
+  // Command to move target user
+  if (message.content.toLowerCase() === '$moveuser') {
+    if (TARGET_USER_ID) {
+      moveUserToChannel(TARGET_USER_ID, CHANNEL_ID);
+      message.reply('Moving target user to main channel...');
+    } else {
+      message.reply('No target user configured!');
     }
   }
 });
